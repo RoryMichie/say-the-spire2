@@ -27,6 +27,9 @@ public class CustomRunGameScreen : GameScreen
     private static readonly System.Reflection.FieldInfo? CharacterButtonSelectedField =
         AccessTools.Field(typeof(NCharacterSelectButton), "_isSelected");
 
+    private static readonly System.Reflection.FieldInfo CharButtonContainerField =
+        AccessTools.Field(typeof(NCustomRunScreen), "_charButtonContainer")!;
+
     public static CustomRunGameScreen? Current { get; private set; }
 
     private readonly NCustomRunScreen _screen;
@@ -187,7 +190,9 @@ public class CustomRunGameScreen : GameScreen
     private void ResolveControls()
     {
         _seedInput ??= _screen.GetNodeOrNull<LineEdit>("%SeedInput");
-        _characterButtonContainer ??= _screen.GetNodeOrNull<Control>("LeftContainer/CharSelectButtons/ButtonContainer");
+        // Read the game's own reference rather than a node path: with more than five characters,
+        // BaseLib's CustomRunScreenScrollPatch reparents this container under a scroll wrapper.
+        _characterButtonContainer ??= CharButtonContainerField.GetValue(_screen) as Control;
         if (_characterButtonContainer != null)
             _characterButtons = _characterButtonContainer.GetChildren().OfType<NCharacterSelectButton>().ToList();
         _ascensionPanel ??= _screen.GetNodeOrNull<NAscensionPanel>("%AscensionPanel");

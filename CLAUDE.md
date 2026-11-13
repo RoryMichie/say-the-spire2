@@ -224,6 +224,7 @@ These private fields/properties are accessed via reflection. A game update renam
 - `NGameOverScreen._score`, `._encounterQuote` — game over display
 - `NTimelineScreen._epochSlotContainer` — timeline slots
 - `NCharacterSelectButton.IsSelected` (property), `._isSelected` — character selection state
+- `NCustomRunScreen._charButtonContainer` — custom mode character row. Read by field, not node path: with more than five characters BaseLib's `CustomRunScreenScrollPatch` reparents the container under a `ButtonScrollContainer`, so `LeftContainer/CharSelectButtons/ButtonContainer` stops resolving (the standard character select keeps its path, because BaseLib's wrapper takes over the `CharSelectButtons` name there)
 - `NDailyRunScreen._lobby`, `NDailyRunLoadScreen._lobby`, `NCustomRunLoadScreen._lobby` — lobby access
 - `NMultiplayerLoadGameScreen._runLobby` — multiplayer load game lobby
 - `NRunHistory.SelectPlayer` (method) — run history player selection
