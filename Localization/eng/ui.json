@@ -120,6 +120,8 @@
   "CUSTOM_RUN.ASCENSION": "Ascension {value}",
   "CUSTOM_RUN.READ_ONLY": "Read only",
   "CUSTOM_RUN.START": "Start custom run",
+  "CUSTOM_RUN.GAME_MODE": "Game mode",
+  "CUSTOM_RUN.RANDOMIZED": "Randomized",
   "CUSTOM_RUN.ROWS.SEED": "Seed",
   "CUSTOM_RUN.ROWS.CHARACTERS": "Characters",
   "CUSTOM_RUN.ROWS.ASCENSION": "Ascension",

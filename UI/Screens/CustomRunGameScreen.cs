@@ -57,6 +57,12 @@ public class CustomRunGameScreen : GameScreen
     private NClickableControl? _ascensionRightArrow;
     private NCustomRunModifiersList? _modifiersList;
     private List<NRunModifierTickbox> _modifierTickboxes = new();
+    private NDropdown? _gameModeDropdown;
+    private Control? _gameModePositioner;
+    private NClickableControl? _randomizeButton;
+    private NClickableControl.ReleasedEventHandler? _randomizeHandler;
+    private bool _randomizePending;
+    private List<string>? _pendingModifierChanges;
     private NClickableControl? _confirmButton;
     private NClickableControl? _unreadyButton;
     private NClickableControl? _backButton;
@@ -73,8 +79,9 @@ public class CustomRunGameScreen : GameScreen
     {
         _screen = screen;
         RootElement = _root;
-        ClaimAction("ui_cancel");
-        ClaimAction("mega_pause_and_back");
+        // While the game mode dropdown is open, cancel belongs to the game (it closes the list).
+        ClaimAction("ui_cancel", condition: () => !IsGameModeDropdownOpen());
+        ClaimAction("mega_pause_and_back", condition: () => !IsGameModeDropdownOpen());
     }
 
     public override void OnPush()
@@ -93,6 +100,7 @@ public class CustomRunGameScreen : GameScreen
         base.OnPop();
         UnbindLobbyBuffer();
         DisconnectModifierListSignal();
+        DisconnectRandomizeSignal();
         _modifierStates.Clear();
         if (Current == this)
             Current = null;
@@ -104,6 +112,7 @@ public class CustomRunGameScreen : GameScreen
             return;
 
         ResolveControls();
+        FlushModifierAnnouncements();
         PollAscension();
 
         var token = BuildStateToken();
@@ -151,6 +160,12 @@ public class CustomRunGameScreen : GameScreen
         _ascensionRow.Clear();
         _modifierRow.Clear();
 
+        if (_gameModeDropdown is { } gameMode && IsUsable(gameMode))
+            RegisterMain(gameMode, GetOrCreate(gameMode, () => new ProxyDropdown(gameMode)
+            {
+                OverrideLabel = UiStatic("CUSTOM_RUN.GAME_MODE"),
+            }));
+
         if (_seedInput != null)
             RegisterRowItem(_seedRow, _seedInput, GetOrCreate(_seedInput, () => ProxyFactory.Create(_seedInput)));
 
@@ -175,6 +190,8 @@ public class CustomRunGameScreen : GameScreen
         AddRowIfNotEmpty(_ascensionRow);
         AddRowIfNotEmpty(_modifierRow);
 
+        if (_randomizeButton != null && IsUsable(_randomizeButton))
+            RegisterMain(_randomizeButton, GetOrCreate(_randomizeButton, CreateRandomizeButtonElement));
         if (_confirmButton != null && IsUsable(_confirmButton))
             RegisterMain(_confirmButton, GetOrCreate(_confirmButton, CreateConfirmButtonElement));
         if (_isMultiplayer && _unreadyButton != null && IsUsable(_unreadyButton))
@@ -183,6 +200,7 @@ public class CustomRunGameScreen : GameScreen
             RegisterMain(_backButton, GetOrCreate(_backButton, CreateBackButtonElement));
 
         ConnectModifierListSignal();
+        ConnectRandomizeSignal();
         if (Settings.UIEnhancementsSettings.CustomRun.Get())
             WireFocusNeighbors();
     }
@@ -205,6 +223,10 @@ public class CustomRunGameScreen : GameScreen
             if (content != null)
                 _modifierTickboxes = content.GetChildren().OfType<NRunModifierTickbox>().ToList();
         }
+        // Beta-only nodes (the dropdown and randomize button types don't exist on stable), so by node name.
+        _gameModeDropdown ??= _screen.GetNodeOrNull<NDropdown>("%GameModeDropdown");
+        _gameModePositioner ??= _screen.GetNodeOrNull<Control>("%GameModeDropdownContainer");
+        _randomizeButton ??= _screen.GetNodeOrNull<NClickableControl>("%CustomRunRandomizeButton");
         _confirmButton ??= _screen.GetNodeOrNull<NClickableControl>("ConfirmButton");
         _unreadyButton ??= _screen.GetNodeOrNull<NClickableControl>("UnreadyButton");
         _backButton ??= _screen.GetNodeOrNull<NClickableControl>("BackButton");
@@ -335,10 +357,72 @@ public class CustomRunGameScreen : GameScreen
 
     private void OnModifiersChanged()
     {
+        // Spoken next frame by FlushModifierAnnouncements: a randomize press lands after this
+        // signal in the same frame and replaces these with one summary.
         var focused = _screen.GetViewport()?.GuiGetFocusOwner() as Control;
         var changes = GetModifierSideEffectAnnouncements(focused as NRunModifierTickbox);
         if (changes.Count > 0)
+            (_pendingModifierChanges ??= new List<string>()).AddRange(changes);
+    }
+
+    private void FlushModifierAnnouncements()
+    {
+        var changes = _pendingModifierChanges;
+        _pendingModifierChanges = null;
+
+        if (_randomizePending)
+        {
+            _randomizePending = false;
+            RefreshModifierStateSnapshot();
+            AnnounceRandomized();
+            return;
+        }
+
+        if (changes != null)
             SpeechManager.Output(Message.Raw(string.Join(". ", changes)));
+    }
+
+    private void AnnounceRandomized()
+    {
+        var parts = new List<Message?> { Ui("CUSTOM_RUN.RANDOMIZED") };
+
+        // The game only re-rolls the character in singleplayer.
+        if (!_isMultiplayer
+            && _characterButtons.FirstOrDefault(b => IsUsable(b) && IsCharacterSelected(b)) is { } selected
+            && _elementCache.TryGetValue(selected.GetInstanceId(), out var element))
+            parts.Add(element.GetLabel());
+
+        foreach (var tickbox in _modifierTickboxes.Where(t => IsUsable(t) && t.IsTicked))
+        {
+            var title = tickbox.Modifier?.Title.GetFormattedText();
+            if (!string.IsNullOrWhiteSpace(title))
+                parts.Add(Message.Raw(title));
+        }
+
+        SpeechManager.Output(Message.Join(", ", parts.ToArray()));
+    }
+
+    private void ConnectRandomizeSignal()
+    {
+        if (_randomizeButton == null || _randomizeHandler != null || !GodotObject.IsInstanceValid(_randomizeButton))
+            return;
+
+        _randomizeHandler = _ => _randomizePending = true;
+        _randomizeButton.Released += _randomizeHandler;
+    }
+
+    private void DisconnectRandomizeSignal()
+    {
+        if (_randomizeButton != null && _randomizeHandler != null && GodotObject.IsInstanceValid(_randomizeButton))
+            _randomizeButton.Released -= _randomizeHandler;
+        _randomizeHandler = null;
+    }
+
+    private bool IsGameModeDropdownOpen()
+    {
+        return _gameModeDropdown != null
+            && GodotObject.IsInstanceValid(_gameModeDropdown)
+            && _gameModeDropdown.GetNodeOrNull<Control>("%DropdownContainer") is { Visible: true };
     }
 
     private List<string> GetModifierSideEffectAnnouncements(NRunModifierTickbox? sourceTickbox)
@@ -383,7 +467,8 @@ public class CustomRunGameScreen : GameScreen
         var chars = _characterButtons.Where(IsUsable).Cast<Control>().ToList();
         var ascension = IsUsable(_ascensionPanel) ? _ascensionPanel : null;
         var modifiers = _modifierTickboxes.Where(IsUsable).Cast<Control>().ToList();
-        var buttons = new[] { _confirmButton, _isMultiplayer ? _unreadyButton : null, _backButton }.Where(IsUsable).Cast<Control>().ToList();
+        var mode = IsUsable(_gameModeDropdown) ? _gameModeDropdown : null;
+        var buttons = new[] { _randomizeButton, _confirmButton, _isMultiplayer ? _unreadyButton : null, _backButton }.Where(IsUsable).Cast<Control>().ToList();
 
         var firstChar = GetPreferredCharacterFocusTarget();
         var firstModifier = modifiers.FirstOrDefault();
@@ -393,10 +478,26 @@ public class CustomRunGameScreen : GameScreen
         {
             var self = seed.GetPath();
             Control downTarget = firstChar ?? firstModifier ?? firstButton ?? (Control?)ascension ?? seed;
-            seed.FocusNeighborTop = self;
+            seed.FocusNeighborTop = mode?.GetPath() ?? self;
             seed.FocusNeighborLeft = self;
             seed.FocusNeighborRight = self;
             seed.FocusNeighborBottom = downTarget.GetPath();
+        }
+
+        if (mode != null)
+        {
+            // The positioner copies its own neighbors onto the dropdown whenever it is shown, so wire both.
+            var self = mode.GetPath();
+            var below = ((Control?)seed ?? firstChar ?? (Control?)ascension ?? firstModifier ?? firstButton ?? mode).GetPath();
+            foreach (var target in new[] { mode, _gameModePositioner })
+            {
+                if (target == null || !GodotObject.IsInstanceValid(target))
+                    continue;
+                target.FocusNeighborTop = self;
+                target.FocusNeighborLeft = self;
+                target.FocusNeighborRight = self;
+                target.FocusNeighborBottom = below;
+            }
         }
 
         for (int i = 0; i < chars.Count; i++)
@@ -469,6 +570,11 @@ public class CustomRunGameScreen : GameScreen
         if (focusOwner != null && GetElement(focusOwner) != null)
             return;
 
+        // The open game mode list's items aren't registered; leave focus with them.
+        if (focusOwner != null && _gameModeDropdown != null && GodotObject.IsInstanceValid(_gameModeDropdown)
+            && _gameModeDropdown.IsAncestorOf(focusOwner))
+            return;
+
         GetInitialFocusTarget()?.GrabFocus();
     }
 
@@ -531,6 +637,8 @@ public class CustomRunGameScreen : GameScreen
 
         parts.AddRange(_characterButtons.Select(b => $"{b.GetInstanceId()}:{b.Visible}:{b.IsEnabled}:{b.IsLocked}"));
         parts.AddRange(_modifierTickboxes.Select(t => $"{t.GetInstanceId()}:{t.Visible}:{t.IsEnabled}"));
+        parts.Add($"{_gameModeDropdown?.Visible}");
+        parts.Add($"{_randomizeButton?.Visible}:{_randomizeButton?.IsEnabled}");
         parts.Add($"{_confirmButton?.Visible}:{_confirmButton?.IsEnabled}");
         parts.Add($"{_unreadyButton?.Visible}:{_unreadyButton?.IsEnabled}");
         parts.Add($"{_backButton?.Visible}:{_backButton?.IsEnabled}");
@@ -583,6 +691,14 @@ public class CustomRunGameScreen : GameScreen
     private static string UiStatic(string key)
     {
         return LocalizationManager.GetOrDefault("ui", key, key);
+    }
+
+    private UIElement CreateRandomizeButtonElement()
+    {
+        return new ActionElement(
+            () => Message.Raw(new LocString("main_menu_ui", "CUSTOM_RUN_SCREEN.RANDOMIZE").GetFormattedText()),
+            status: () => GetButtonStatus(_randomizeButton),
+            typeKey: () => "button");
     }
 
     private UIElement CreateConfirmButtonElement()
