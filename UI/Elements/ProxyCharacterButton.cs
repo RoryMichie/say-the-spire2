@@ -7,6 +7,7 @@ using MegaCrit.Sts2.Core.Nodes.Screens.CustomRun;
 using SayTheSpire2.Buffers;
 using SayTheSpire2.Localization;
 using SayTheSpire2.UI.Announcements;
+using SayTheSpire2.Views;
 
 namespace SayTheSpire2.UI.Elements;
 
@@ -16,6 +17,7 @@ namespace SayTheSpire2.UI.Elements;
     typeof(StartingHpAnnouncement),
     typeof(StartingGoldAnnouncement),
     typeof(RemoteSelectionAnnouncement),
+    typeof(DreadStreakAnnouncement),
     typeof(TooltipAnnouncement)
 )]
 public class ProxyCharacterButton : ProxyElement
@@ -63,6 +65,9 @@ public class ProxyCharacterButton : ProxyElement
             yield return new LabelAnnouncement(label);
 
         var button = Button;
+        // The Dread lobby has no info panel: no HP or gold there, but each
+        // character has a win streak.
+        var dread = DreadLobbyView.FromControl(button);
 
         if (button != null && button.IsLocked)
         {
@@ -73,12 +78,19 @@ public class ProxyCharacterButton : ProxyElement
         {
             // Real stats are unknown for BaseLib entries until the entry
             // resolves to a character, so only vanilla buttons announce them.
-            yield return new StartingHpAnnouncement(character.StartingHp);
-            yield return new StartingGoldAnnouncement(character.StartingGold);
+            if (dread == null)
+            {
+                yield return new StartingHpAnnouncement(character.StartingHp);
+                if (LobbyShowsStartingGold(button))
+                    yield return new StartingGoldAnnouncement(character.StartingGold);
+            }
             var remoteCount = button.RemoteSelectedPlayers.Count;
             if (remoteCount > 0)
                 yield return new RemoteSelectionAnnouncement(remoteCount);
         }
+
+        if (button != null && dread != null && dread.StreakLinesFor(button) is { Count: > 0 } streak)
+            yield return new DreadStreakAnnouncement(streak);
 
         var tooltip = GetTooltip();
         if (tooltip != null)
@@ -89,6 +101,16 @@ public class ProxyCharacterButton : ProxyElement
     {
         var button = Button;
         if (button == null) return Control != null ? Message.Raw(CleanNodeName(Control.Name)) : null;
+
+        // The Dread lobby's Rotating button: the game flags it random, but it
+        // is the next character on the running rotating streak ("Rotating,
+        // Next: Silent").
+        if (DreadLobbyView.IsRotating(button.Character))
+        {
+            var rotating = Message.Raw(new LocString("characters", button.Character.CharacterSelectTitle).GetFormattedText());
+            var next = DreadLobbyView.FromControl(button)?.RotatingNextText;
+            return next != null ? Message.Join(", ", rotating, Message.Raw(next)) : rotating;
+        }
 
         if (button.IsRandom) return Message.Localized("ui", "LABELS.RANDOM");
 
@@ -125,11 +147,12 @@ public class ProxyCharacterButton : ProxyElement
 
         if (button.IsRandom) return null;
 
-        var parts = new System.Collections.Generic.List<Message>
+        var parts = new System.Collections.Generic.List<Message>();
+        if (DreadLobbyView.FromControl(button) == null)
         {
-            Message.Localized("ui", "CHARACTER.STARTING_HP", new { amount = character.StartingHp }),
-            Message.Localized("ui", "CHARACTER.STARTING_GOLD", new { amount = character.StartingGold }),
-        };
+            parts.Add(Message.Localized("ui", "CHARACTER.STARTING_HP", new { amount = character.StartingHp }));
+            parts.Add(Message.Localized("ui", "CHARACTER.STARTING_GOLD", new { amount = character.StartingGold }));
+        }
 
         var remoteCount = button.RemoteSelectedPlayers.Count;
         if (remoteCount > 0)
@@ -138,7 +161,7 @@ public class ProxyCharacterButton : ProxyElement
             parts.Add(Message.Localized("ui", remoteKey, new { count = remoteCount }));
         }
 
-        return Message.Join(", ", parts.ToArray());
+        return parts.Count > 0 ? Message.Join(", ", parts.ToArray()) : null;
     }
 
     public override Message? GetTooltip()
@@ -176,6 +199,25 @@ public class ProxyCharacterButton : ProxyElement
             parts.Add(ascension);
 
         return parts.Count > 0 ? Message.Join(". ", parts.ToArray()) : null;
+    }
+
+    // Path of the starting-gold display inside a lobby screen's info panel.
+    private const string LobbyGoldPath = "InfoPanel/VBoxContainer/HpGoldSpacer/HpGold/Gold";
+
+    /// <summary>
+    /// Whether the lobby this button sits in shows starting gold. Character
+    /// select does; the Blitz lobby has the same info panel with the gold
+    /// entry hidden (Blitz has no gold). Lobbies without that panel are
+    /// treated as showing it, as before.
+    /// </summary>
+    public static bool LobbyShowsStartingGold(NCharacterSelectButton button)
+    {
+        for (Node? node = button.GetParent(); node != null; node = node.GetParent())
+        {
+            if (node.GetNodeOrNull<Control>(LobbyGoldPath) is { } gold)
+                return gold.Visible;
+        }
+        return true;
     }
 
     private static Message? GetAscensionText(NCharacterSelectButton button)
